@@ -12,6 +12,12 @@ midi_dir = './mozart'
 midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
 
+class Header(NamedTuple):
+    format_type: int
+    num_tracks: int
+    division: bytes
+
+
 def to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
 
@@ -104,32 +110,40 @@ def read_event(b: bytes, last_event=None):
 
 
 def parse_track(b: bytes):
-    events = [None]
+    events = []
     lv = None
     while len(b) > 0:
         delta, b = read_variable_int(b)
         if len(b) == 0:
             break
-        evt, b = read_event(b, last_event=events[-1])
+        evt, b = read_event(b, last_event=lv)
+        lv = evt
+        if evt[0] == 'note on' and evt[2] == 0:
+            evt = ('note off', evt[1], 0x40)
         events.append(evt)
 
-    print(events)
-    count = 0
-    for e in events:
-        if e and e[0] == 'note on':
-            count += 1
-    print(count)
+    return events
 
-file_path = midi_files[0]
+file_path = midi_files[1]
 print(file_path)
 with open(file_path, 'rb') as f:
+
+    header = None
+    track_data = []
     f.seek(0, 0)
     while f.peek(4) is not b'':
         chunk_type = f.read(4)
         chunk_len = to_int(f.read(4))
-        chunk_data = f.read(chunk_len)
 
         if chunk_type == b'MThd':
-            pass
+            assert chunk_len == 6
+            header = Header(
+                to_int(f.read(2)), to_int(f.read(2)), f.read(2)
+            )
         elif chunk_type == b'MTrk' and chunk_len > 0:
-            parse_track(chunk_data)
+            track_data.append(parse_track(f.read(chunk_len)))
+
+    assert header
+    assert len(track_data) == header.num_tracks
+
+    print(track_data[1])
