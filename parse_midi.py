@@ -16,13 +16,13 @@ def to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
 
 
-def read_variable_int(infile: BufferedReader) -> int:
+def read_variable_int(buff: BufferedReader) -> int:
     delta = 0
-    while True:
-        byte = to_int(infile.read(1))
-        delta = (delta << 7) | (byte & 0x7f)
-        if byte < 0x80:
-            return delta
+    byte = buff.read(1)
+    while byte >= b'\x80':
+        delta = (delta << 7) | (to_int(byte) & 0x7f)
+        byte = buff.read(1)
+    return delta
 
 
 class Event(NamedTuple):
@@ -51,10 +51,10 @@ class Event(NamedTuple):
                 params.append(byte)
             return '%s: %s' % (status_map[status], str(params))
 
-        raise Exception('Error while printing Event!')
+        raise Exception('Error while printing Event:', str(status))
 
     @staticmethod
-    def from_bytes(b: BufferedReader, prev_event: Optional['Event']) -> 'Event':
+    def from_bytes(b: BufferedReader, prev_evt: Optional['Event']) -> 'Event':
         dtime = read_variable_int(b)
         status = b.read(1)
         if status == b'\xff':
@@ -64,20 +64,18 @@ class Event(NamedTuple):
             return MetaEvent(_type, -1, data, 0)
 
         data = b''
-        if status < b'\x80' and prev_event:
+        if status < b'\x80' and prev_evt:
             data += status
-            status = prev_event.status
+            status = prev_evt.status
 
-        datasize = 0
         channel = to_int(status) % 16
         value = to_int(status) >> 4
         if value in [0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE]:
             if value in [0xC, 0xD]:
-                datasize = 1
+                data += b.read(1 - len(data))
             else:
-                datasize = 2
+                data += b.read(2 - len(data))
 
-        data += b.read(datasize - len(data))
         return Event(status, channel, data, dtime)
 
 
@@ -101,14 +99,10 @@ class MetaEvent(Event):
             0x59: 'key signature',
         }
         status = to_int(self.status)
-
         if status in status_map:
-            params = []
-            for byte in self.data:
-                params.append(byte)
             return '%s: %s' % (status_map[status], str(self.data))
 
-        raise Exception('Error while printing Event!')
+        raise Exception('Error while printing Event: ' + str(self.status))
 
 
 class Track(NamedTuple):
@@ -121,8 +115,8 @@ class Track(NamedTuple):
         start_pos = b.tell()
         events: List[Event] = []
         while b.tell() - start_pos < chunk_len:
-            prev_event = events[-1] if len(events) > 0 else None
-            event = Event.from_bytes(b, prev_event)
+            prev_evt = events[-1] if len(events) > 0 else None
+            event = Event.from_bytes(b, prev_evt)
             events.append(event)
 
         return Track({}, events)
@@ -144,6 +138,24 @@ class Header(NamedTuple):
         )
 
 
+class Midi(NamedTuple):
+    header: Header
+    tracks: List[Track]
+
+    @staticmethod
+    def from_bytes(b: BufferedReader) -> 'Midi':
+        header = None
+        tracks = []
+        while midi_buffer.peek(4):
+            chunk_type = midi_buffer.read(4)
+            if chunk_type == b'MThd':
+                header = Header.from_bytes(midi_buffer)
+            elif chunk_type == b'MTrk':
+                track = Track.from_bytes(midi_buffer)
+                tracks.append(track)
+        return Midi(header, tracks)
+
+
 midi_dir = './mozart'
 midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
@@ -151,11 +163,5 @@ file_path = midi_files[9]
 with open(file_path, 'rb') as midi_file:
     fio = FileIO(midi_file.fileno())
     midi_buffer = BufferedReader(fio)
-    while midi_buffer.peek(4):
-        chunk_type = midi_buffer.read(4)
-        if chunk_type == b'MThd':
-            header = Header.from_bytes(midi_buffer)
-            print(header)
-        elif chunk_type == b'MTrk':
-            track = Track.from_bytes(midi_buffer)
-            print(track)
+    midi = Midi.from_bytes(midi_buffer)
+    print(midi)
