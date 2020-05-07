@@ -108,29 +108,30 @@ def read_event(b: BufferedReader, last_event=None) -> Event:
         0xD: 'change value',
         0xE: 'pitch bend'
     }
-    status = status >> 4
-    if status in [0x8, 0x9, 0xA, 0xB, 0xE]:
+    # status = status >> 4
+    if status >> 4 in [0x8, 0x9, 0xA, 0xB, 0xE]:
         return Event(
-            event_types[status],
+            event_types[status >> 4],
             {'p1': to_int(b.read(1)), 'p2': to_int(b.read(1))},
             0)
-    elif status in [0xC, 0xD]:
+    elif status >> 4 in [0xC, 0xD]:
         return Event(
-            event_types[status],
+            event_types[status >> 4],
             {'p1': to_int(b.read(1))},
             0)
-    elif status < 0x8 and last_event:
-        if len(last_event) == 3 and last_event[2] is None:
+    elif last_event:
+        print(hex(status))
+        if 'p2' not in last_event.data:
             return Event(
-                last_event[0],
+                last_event.type,
                 {'p1': to_int(b.read(1))},
-                0)    
-        else:
-            return Event(
-                last_event[0],
-                {'p1': to_int(b.read(1)), 'p2': to_int(b.read(1))},
-                0)
+                0)   
+        return Event(
+            last_event.type,
+            {'p1': to_int(b.read(1)), 'p2': to_int(b.read(1))},
+            0)
 
+    print('>>>', last_event, status, status == 0xfd)
     raise Exception('failed to parse event:', b.read(20))
 
 
@@ -165,5 +166,13 @@ with open(file_path, 'rb') as f:
 
         assert len(track_data) == header.num_tracks
         assert header
+
     from pprint import pprint
-    pprint(track_data[0])
+    # pprint(track_data[2])
+    for track in track_data:
+        print('----')
+        for evt in track:
+            if evt.type == 'Track Name':
+                print(evt)
+            if evt.type == 'note on':
+                print(evt)
