@@ -8,9 +8,8 @@ Max Sun 2020
 '''
 from os import listdir
 from os.path import join
-import binascii
-from typing import Tuple, Dict, Optional, NamedTuple, List
-from io import BytesIO, BufferedReader, FileIO
+from typing import Dict, Optional, NamedTuple, List
+from io import BufferedReader, FileIO
 
 
 def to_int(b: bytes) -> int:
@@ -26,12 +25,9 @@ def read_variable_int(infile: BufferedReader) -> int:
             return delta
 
 
-midi_dir = './mozart'
-midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
-
-
 class Event(NamedTuple):
     status: bytes
+    channel: int
     data: bytes
     delta_time: int
 
@@ -45,49 +41,74 @@ class Event(NamedTuple):
             0xD: 'channel aftertouch',
             0xE: 'pitch bend',
         }
-        x = to_int(self.status) >> 4
-        if self.status == b'\xff':
+        status = to_int(self.status) >> 4
+        if status == 0xf:
             return 'META: %s' % str(self.data)
-        elif x in status_map:
+
+        elif status in status_map:
             params = []
             for byte in self.data:
                 params.append(byte)
-            return '%s: %s' % (status_map[x], str(params))
+            return '%s: %s' % (status_map[status], str(params))
 
-        raise Exception('Error while printing Event!')        
+        raise Exception('Error while printing Event!')
 
     @staticmethod
-    def from_bytes(b: BufferedReader, running_status: Optional[bytes]) -> 'Event':
+    def from_bytes(b: BufferedReader, prev_event: Optional['Event']) -> 'Event':
         dtime = read_variable_int(b)
         status = b.read(1)
         if status == b'\xff':
             _type = b.read(1)
             msg_len = to_int(b.read(1))
             data = b.read(msg_len)
-            return Event(status, data, 0)
+            return MetaEvent(_type, -1, data, 0)
 
-        if status < b'\x80' and running_status:
-            # TODO: FIX THIS
-            n = to_int(running_status) % 16
-            evt_value = to_int(running_status) >> 4
-            if evt_value in [0xC, 0xD]:
-                data = status
+        data = b''
+        if status < b'\x80' and prev_event:
+            data += status
+            status = prev_event.status
+
+        datasize = 0
+        channel = to_int(status) % 16
+        value = to_int(status) >> 4
+        if value in [0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE]:
+            if value in [0xC, 0xD]:
+                datasize = 1
             else:
-                # TODO: capture the status byte too
-                data = b.read(1)
+                datasize = 2
 
-            return Event(running_status, status + data, dtime)
+        data += b.read(datasize - len(data))
+        return Event(status, channel, data, dtime)
 
-        if to_int(status) >> 4 in [0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE]:
-            n = to_int(status) % 16
-            evt_value = to_int(status) >> 4
-            if evt_value in [0xC, 0xD]:
-                data = b.read(1)
-            else:
-                data = b.read(2)
-            return Event(status, data, dtime)
 
-        raise Exception('Failed to read event:', status)
+class MetaEvent(Event):
+
+    def __repr__(self) -> str:
+        status_map = {
+            0x00: 'sequence number',
+            0x01: 'text event',
+            0x02: 'copyright notice',
+            0x03: 'track name',
+            0x04: 'instrument name',
+            0x05: 'lyrics',
+            0x06: 'marker',
+            0x07: 'cue point',
+            0x20: 'midi channel prefix',
+            0x2f: 'end of track',
+            0x51: 'set tempo',
+            0x54: 'smpte offset',
+            0x58: 'time signature',
+            0x59: 'key signature',
+        }
+        status = to_int(self.status)
+
+        if status in status_map:
+            params = []
+            for byte in self.data:
+                params.append(byte)
+            return '%s: %s' % (status_map[status], str(self.data))
+
+        raise Exception('Error while printing Event!')
 
 
 class Track(NamedTuple):
@@ -98,11 +119,10 @@ class Track(NamedTuple):
     def from_bytes(b: BufferedReader) -> 'Track':
         chunk_len = to_int(b.read(4))
         start_pos = b.tell()
-        running_status = None
-        events = []
+        events: List[Event] = []
         while b.tell() - start_pos < chunk_len:
-            event = Event.from_bytes(b, running_status)
-            running_status = event.status
+            prev_event = events[-1] if len(events) > 0 else None
+            event = Event.from_bytes(b, prev_event)
             events.append(event)
 
         return Track({}, events)
@@ -123,6 +143,9 @@ class Header(NamedTuple):
             b.read(2)
         )
 
+
+midi_dir = './mozart'
+midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
 file_path = midi_files[9]
 with open(file_path, 'rb') as midi_file:
