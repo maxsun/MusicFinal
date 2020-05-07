@@ -35,6 +35,27 @@ class Event(NamedTuple):
     data: bytes
     delta_time: int
 
+    def __repr__(self) -> str:
+        status_map = {
+            0x8: 'note off',
+            0x9: 'note on',
+            0xA: 'note aftertouch',
+            0xB: 'controller',
+            0xC: 'program change',
+            0xD: 'channel aftertouch',
+            0xE: 'pitch bend',
+        }
+        x = to_int(self.status) >> 4
+        if self.status == b'\xff':
+            return 'META: %s' % str(self.data)
+        elif x in status_map:
+            params = []
+            for byte in self.data:
+                params.append(byte)
+            return '%s: %s' % (status_map[x], str(params))
+
+        raise Exception('Error while printing Event!')        
+
     @staticmethod
     def from_bytes(b: BufferedReader, running_status: Optional[bytes]) -> 'Event':
         dtime = read_variable_int(b)
@@ -43,7 +64,7 @@ class Event(NamedTuple):
             _type = b.read(1)
             msg_len = to_int(b.read(1))
             data = b.read(msg_len)
-            return Event(_type, data, 0)
+            return Event(status, data, 0)
 
         if status < b'\x80' and running_status:
             # TODO: FIX THIS
@@ -54,7 +75,8 @@ class Event(NamedTuple):
             else:
                 # TODO: capture the status byte too
                 data = b.read(1)
-            return Event(running_status, data, dtime)
+
+            return Event(running_status, status + data, dtime)
 
         if to_int(status) >> 4 in [0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE]:
             n = to_int(status) % 16
@@ -67,21 +89,23 @@ class Event(NamedTuple):
 
         raise Exception('Failed to read event:', status)
 
+
 class Track(NamedTuple):
     metadata: Dict
     events: List[Event]
 
     @staticmethod
-    def from_bytes(b: BufferedReader) -> 'Track': 
+    def from_bytes(b: BufferedReader) -> 'Track':
+        chunk_len = to_int(b.read(4))
+        start_pos = b.tell()
         running_status = None
         events = []
-        while b.peek(1):
+        while b.tell() - start_pos < chunk_len:
             event = Event.from_bytes(b, running_status)
             running_status = event.status
             events.append(event)
-        
-        return Track({}, events)
 
+        return Track({}, events)
 
 
 class Header(NamedTuple):
@@ -91,6 +115,8 @@ class Header(NamedTuple):
 
     @staticmethod
     def from_bytes(b: BufferedReader) -> 'Header':
+        header_len = to_int(b.read(4))
+        assert header_len == 6
         return Header(
             to_int(b.read(2)),
             to_int(b.read(2)),
@@ -98,22 +124,15 @@ class Header(NamedTuple):
         )
 
 
-file_path = midi_files[1]
+file_path = midi_files[9]
 with open(file_path, 'rb') as midi_file:
     fio = FileIO(midi_file.fileno())
     midi_buffer = BufferedReader(fio)
-    # with BufferedReader(midi_file) as midi_buffer:
-    while midi_buffer.peek(4) is not b'':
+    while midi_buffer.peek(4):
         chunk_type = midi_buffer.read(4)
-        chunk_len = to_int(midi_buffer.read(4))
-        chunk_buff = BufferedReader(BytesIO(midi_buffer.read(chunk_len))) 
         if chunk_type == b'MThd':
-            header = Header.from_bytes(chunk_buff)
+            header = Header.from_bytes(midi_buffer)
             print(header)
-        elif chunk_type == b'MTrk' and chunk_len > 0:
-            track = Track.from_bytes(chunk_buff)
-            
-            for e in track.events:
-                if to_int(e.status) >> 4 == 0x9:
-                    print(e)
-                # break
+        elif chunk_type == b'MTrk':
+            track = Track.from_bytes(midi_buffer)
+            print(track)
