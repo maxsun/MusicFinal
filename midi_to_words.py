@@ -5,8 +5,8 @@ https://github.com/colxi/midi-parser-js/wiki/MIDI-File-Format-Specifications
 from os import listdir
 from os.path import join
 import binascii
-from typing import Tuple, Dict, Optional, NamedTuple
-from io import BytesIO
+from typing import Tuple, Dict, Optional, NamedTuple, List
+from io import BytesIO, BufferedReader
 
 midi_dir = './mozart'
 midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
@@ -18,132 +18,152 @@ class Header(NamedTuple):
     division: bytes
 
 
+class Event(NamedTuple):
+    type: str
+    data: Dict
+    dtime: int
+
+    def __repr__(self) -> str:
+        return '[%s, %s, %s]' % (self.type, self.data, self.dtime)
+
+
 def to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder='big')
 
 
-def read_variable_int(infile):
+def read_variable_int(infile: BufferedReader) -> int:
     delta = 0
-
     while True:
-        byte = infile[0]
+        byte = to_int(infile.read(1))
         delta = (delta << 7) | (byte & 0x7f)
         if byte < 0x80:
-            return (delta, infile[1:])
-        infile = infile[1:]
+            return delta
 
 
-def read_event(b: bytes, last_event=None):
-    event_type = b[0]
-    if event_type == 0xff:
-        text_event_flags = {
-            b'\x01': 'Text',
-            b'\x02': 'Copyright Notice',
-            b'\x03': 'Track Name',
-            b'\x04': 'Instrument Name',
-            b'\x05': 'Lyric',
-            b'\x06': 'Marker',
-            b'\x07': 'Cue Point',
-            b'\x2f': 'End of track'
-        }
-        meta_flag = b[1:2]
+def read_meta_event(b: BufferedReader):
+    text_event_flags = {
+        b'\x01': 'Text',
+        b'\x02': 'Copyright Notice',
+        b'\x03': 'Track Name',
+        b'\x04': 'Instrument Name',
+        b'\x05': 'Lyric',
+        b'\x06': 'Marker',
+        b'\x07': 'Cue Point',
+        b'\x2f': 'End of track'
+    }
+    flag = b.read(1)
 
-        if meta_flag in text_event_flags:
-            text_len = to_int(b[2:3])
-            text = b[3:3 + text_len]
-            return ((text_event_flags[meta_flag], text), b[3 + text_len:])
-        elif meta_flag == b'\x20':
-            raise NotImplementedError('MIDI Channel Prefix')
-        elif meta_flag == b'\x51':
-            t = to_int(b[3:6])
-            assert t >= 0 and t <= 8355711
-            return (('Set Tempo', t), b[6:])
-        elif meta_flag == b'\x54':
-            raise NotImplementedError('SMTPE Offset')
-        elif meta_flag == b'\x58':
-            nn = to_int(b[3:4])
-            dd = 2 ** to_int(b[4:5])
-            cc = to_int(b[5:6])  # typically 24
-            bb = to_int(b[6:7])  # typically 8
-            assert nn >= 0 and nn <= 255
-            assert dd >= 0 and dd <= 255
-            assert cc >= 0 and cc <= 255
-            assert bb >= 1 and bb <= 255
-            return (('Time Signature:', (nn, dd, cc, bb)), b[7:])
+    if flag in text_event_flags:
+        text_len = to_int(b.read(1))
+        text = b.read(text_len)
+        return Event(text_event_flags[flag], {'msg': text}, 0)
+    elif flag == b'\x20':
+        raise NotImplementedError('MIDI Channel Prefix')
+    elif flag == b'\x51':
+        b.read(1)
+        t = to_int(b.read(3))
+        return Event('Set Tempo', {'tempo': t}, 0)
+    elif flag == b'\x54':
+        raise NotImplementedError('SMTPE Offset')
+    elif flag == b'\x58':
+        b.read(1)
+        nn = to_int(b.read(1))
+        dd = to_int(b.read(1))
+        cc = to_int(b.read(1))
+        bb = to_int(b.read(1))
+        return Event('Time Signature:', {
+            'nn': nn,
+            'dd': 2 ** dd,
+            'cc': cc,
+            'bb': bb
+        }, 0)
 
-        elif meta_flag == b'\x59':
-            sf = int.from_bytes(b[3:4], byteorder='big', signed=True)
-            mi = to_int(b[4:5])
-            assert sf >= -7 and sf <= 7
-            assert mi == 0 or mi == 1
-            return(('Key Signature:', (sf, mi)), b[5:])
+    elif flag == b'\x59':
+        b.read(1)
+        sf = int.from_bytes(b.read(1), byteorder='big', signed=True)
+        mi = to_int(b.read(1))
+        return Event('Key Signature:', {
+            'sf': sf,
+            'mi': mi
+        }, 0)
 
-        elif meta_flag == b'\x7F':
-            raise NotImplementedError('Sequencer-Specific Event')
+    elif flag == b'\x7F':
+        raise NotImplementedError('Sequencer-Specific Event')
 
+    raise Exception('Uncaught meta event')
+
+
+def read_event(b: BufferedReader, last_event=None) -> Event:
+    if b.peek(1) is b'':
+        return None
+    status = ord(b.read(1))
+    if status == 0xff:
+        return read_meta_event(b)
+    event_types = {
+        0x8: 'note off',
+        0x9: 'note on',
+        0xA: 'note aftertouch',
+        0xB: 'controller',
+        0xC: 'program change',
+        0xD: 'change value',
+        0xE: 'pitch bend'
+    }
+    status = status >> 4
+    if status in [0x8, 0x9, 0xA, 0xB, 0xE]:
+        return Event(
+            event_types[status],
+            {'p1': to_int(b.read(1)), 'p2': to_int(b.read(1))},
+            0)
+    elif status in [0xC, 0xD]:
+        return Event(
+            event_types[status],
+            {'p1': to_int(b.read(1))},
+            0)
+    elif status < 0x8 and last_event:
+        if len(last_event) == 3 and last_event[2] is None:
+            return Event(
+                last_event[0],
+                {'p1': to_int(b.read(1))},
+                0)    
         else:
-            raise Exception('Uncaught meta event')
-    else:
-        event_types = {
-            0x8: 'note off',
-            0x9: 'note on',
-            0xA: 'note aftertouch',
-            0xB: 'controller',
-            0xC: 'program change',
-            0xD: 'change value',
-            0xE: 'pitch bend'
-        }
-        val = event_type >> 4
-        p1 = to_int(b[1:2])
-        p2 = to_int(b[2:3])
-        if val in [0x8, 0x9, 0xA, 0xB, 0xE]:
-            return ((event_types[val], p1, p2), b[3:])
-        elif val in [0xC, 0xD]:
-            return ((event_types[val], p1, None), b[2:])
-        elif val < 0x8:
-            if last_event[2] is None:
-                return ((last_event[0], to_int(b[0:1]), None), b[1:])
-            else:
-                return ((last_event[0], to_int(b[0:1]), to_int(b[1:2])), b[2:])
+            return Event(
+                last_event[0],
+                {'p1': to_int(b.read(1)), 'p2': to_int(b.read(1))},
+                0)
 
-    raise Exception('failed to parse event:', b[:20])
+    raise Exception('failed to parse event:', b.read(20))
 
 
-def parse_track(b: bytes):
-    events = []
+def parse_track(b: BufferedReader) -> List[Event]:
+    events: List[Event] = []
     lv = None
-    while len(b) > 0:
-        delta, b = read_variable_int(b)
-        if len(b) == 0:
-            break
-        evt, b = read_event(b, last_event=lv)
-        lv = evt
-        if evt[0] == 'note on' and evt[2] == 0:
-            evt = ('note off', evt[1], 0x40)
+    while b.peek(1) != b'':
+        delta = read_variable_int(b)
+        evt = read_event(b, last_event=events[-1] if len(events) > 0 else None)
         events.append(evt)
-
     return events
 
+
 file_path = midi_files[1]
-print(file_path)
 with open(file_path, 'rb') as f:
+    with BufferedReader(f) as b:
+        header = None
+        track_data = []
+        b.seek(0, 0)
+        while b.peek(4) is not b'':
+            chunk_type = b.read(4)
+            chunk_len = to_int(b.read(4))
+            if chunk_type == b'MThd':
+                assert chunk_len == 6
+                header = Header(
+                    to_int(b.read(2)), to_int(b.read(2)), b.read(2)
+                )
+            elif chunk_type == b'MTrk' and chunk_len > 0:
+                track_buffer = BufferedReader(BytesIO(b.read(chunk_len)))
+                track_data.append(parse_track(track_buffer))
 
-    header = None
-    track_data = []
-    f.seek(0, 0)
-    while f.peek(4) is not b'':
-        chunk_type = f.read(4)
-        chunk_len = to_int(f.read(4))
 
-        if chunk_type == b'MThd':
-            assert chunk_len == 6
-            header = Header(
-                to_int(f.read(2)), to_int(f.read(2)), f.read(2)
-            )
-        elif chunk_type == b'MTrk' and chunk_len > 0:
-            track_data.append(parse_track(f.read(chunk_len)))
-
-    assert header
-    assert len(track_data) == header.num_tracks
-
-    print(track_data[1])
+        assert len(track_data) == header.num_tracks
+        assert header
+    from pprint import pprint
+    pprint(track_data[0])
