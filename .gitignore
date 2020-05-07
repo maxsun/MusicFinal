@@ -2,3 +2,4 @@ env
 .vscode
 .mypy_cache
 .DS_Store
+midi_files

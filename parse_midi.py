@@ -1,9 +1,5 @@
 '''
 a rough MIDI Parser
-
-Reference:
-https://github.com/colxi/midi-parser-js/wiki/MIDI-File-Format-Specifications
-
 Max Sun 2020
 '''
 from os import listdir
@@ -153,10 +149,12 @@ class Midi(NamedTuple):
             elif chunk_type == b'MTrk':
                 track = Track.from_bytes(midi_buffer)
                 tracks.append(track)
+        if header is None:
+            raise Exception('Failed to find header!')
         return Midi(header, tracks)
 
 
-midi_dir = './mozart'
+midi_dir = './midi_files'
 midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
 file_path = midi_files[9]
