@@ -4,7 +4,7 @@ Max Sun 2020
 '''
 from os import listdir
 from os.path import join
-from typing import Dict, Optional, NamedTuple, List
+from typing import Dict, Optional, NamedTuple, List, Union
 from io import BufferedReader, FileIO
 from enum import Enum
 
@@ -31,6 +31,29 @@ class EventType(Enum):
     Channel_Aftertouch = 0xD
     Pitch = 0xE
 
+    def data_len(self) -> int:
+        if self in [0xC, 0xD]:
+            return 1
+        return 2
+
+    def parse_data(self, data: bytes):
+        p1, p2 = {
+            EventType.Note_Off: ('Note', 'Velocity'),
+            EventType.Note_On: ('Note', 'Velocity'),
+            EventType.Note_Aftertouch: ('Note', 'Amount'),
+            EventType.Controller: ('Controller Num', 'Value'),
+            EventType.Program: ('Program Num', None),
+            EventType.Channel_Aftertouch: ('Amount', None),
+            EventType.Pitch: ('LSB', 'MSB')
+        }[self]
+
+        if p1 and p2:
+            return {p1: data[0], p2: data[1]}
+        elif p1:
+            return {p1: data[0]}
+
+        raise Exception('Error Parsing Data!')
+
 
 class MetaEventType(Enum):
     Sequence_Num = 0x00
@@ -48,68 +71,99 @@ class MetaEventType(Enum):
     Time_Sig = 0x58
     Key_Sig = 0x59
 
+    def parse_data(self, data: bytes):
+
+        if self == MetaEventType.SMPTE_Offset:
+            raise NotImplementedError('SPTME Offset Parsing missing!')
+
+        if self == MetaEventType.Time_Sig:
+            return str(data)
+
+        if self in [
+            MetaEventType.Sequence_Num,
+            MetaEventType.Midi_Channel_Prefix,
+            MetaEventType.Set_Tempo
+        ]:
+            return to_int(data)
+        
+        return str(data)
+
+
 
 class Event(NamedTuple):
-    status: bytes
+    status: EventType
     channel: int
     data: bytes
-    delta_time: int
 
     def __repr__(self) -> str:
-        status = to_int(self.status) >> 4
         params = []
         for byte in self.data:
             params.append(byte)
-        return '%s: %s' % (EventType(status), str(params))
+        x = self.status.parse_data(self.data)
+        return '%s: %s' % (self.status, str(x))
 
     @staticmethod
-    def from_bytes(b: BufferedReader, last_event: Optional['Event']) -> 'Event':
-        dtime = read_variable_int(b)
+    def from_bytes(b: BufferedReader) -> 'Event':
+
         status = b.read(1)
-        if status == b'\xff':
-            msg_type = b.read(1)
-            msg_len = to_int(b.read(1))
-            data = b.read(msg_len)
-            # TODO: Find out what channel meta events should be on
-            return MetaEvent(msg_type, -1, data, dtime)
 
-        if status < b'\x80' and last_event:
-            return Event(
-                last_event.status,
-                last_event.channel,
-                status + b.read(len(last_event.data) - 1),
-                dtime)
-
-        channel = to_int(status) % 16
         value = to_int(status) >> 4
-        if value in [0x8, 0x9, 0xA, 0xB, 0xE]:
-            return Event(status, channel, b.read(2), dtime)
-        elif value in [0xC, 0xD]:
-            return Event(status, channel, b.read(1), dtime)
-        else:
-            raise Exception('Unable to read Event!')
+        return Event(
+            EventType(value),
+            to_int(status) % 16,
+            b.read(EventType(value).data_len()))
 
 
-class MetaEvent(Event):
+class MetaEvent(NamedTuple):
+    status: MetaEventType
+    data: bytes
 
     def __repr__(self) -> str:
-        status = to_int(self.status)
-        return '%s: %s' % (MetaEventType(status), str(self.data))
+        params = []
+        for byte in self.data:
+            params.append(byte)
+        x = self.status.parse_data(self.data)
+        return '%s: %s' % (self.status, str(x))
+
+
+    # TODO: Find out what channel meta events should be on
+
+    @staticmethod
+    def from_bytes(b: BufferedReader) -> 'MetaEvent':
+        meta_flag = to_int(b.read(1))
+        assert meta_flag == 0xff
+        msg_type = to_int(b.read(1))
+        msg_len = to_int(b.read(1))
+        data = b.read(msg_len)
+        return MetaEvent(MetaEventType(msg_type), data)
 
 
 class Track(NamedTuple):
+
     metadata: Dict
-    events: List[Event]
+    events: List[Union[Event, MetaEvent]]
 
     @staticmethod
     def from_bytes(b: BufferedReader) -> 'Track':
         chunk_len = to_int(b.read(4))
         start_pos = b.tell()
-        events: List[Event] = []
+        events: List[Union[Event, MetaEvent]] = []
         while b.tell() - start_pos < chunk_len:
             last_event = events[-1] if len(events) > 0 else None
-            event = Event.from_bytes(b, last_event)
-            events.append(event)
+
+            dtime = read_variable_int(b)
+            status_peek = b.peek(1)[:1]
+
+            # print(hex(to_int(status_peek)))
+            if status_peek == b'\xff':
+                events.append(MetaEvent.from_bytes(b))
+            elif status_peek < b'\x80' and last_event and isinstance(last_event, Event):
+                events.append(Event(
+                    last_event.status,
+                    last_event.channel,
+                    b.read(len(last_event.data))))
+            else:
+                events.append(Event.from_bytes(b))
 
         return Track({}, events)
 
