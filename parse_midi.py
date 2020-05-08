@@ -6,6 +6,7 @@ from os import listdir
 from os.path import join
 from typing import Dict, Optional, NamedTuple, List
 from io import BufferedReader, FileIO
+from enum import Enum
 
 
 def to_int(b: bytes) -> int:
@@ -13,12 +14,39 @@ def to_int(b: bytes) -> int:
 
 
 def read_variable_int(buff: BufferedReader) -> int:
-    delta = 0
+    delta: int = 0
     byte = buff.read(1)
     while byte >= b'\x80':
         delta = (delta << 7) | (to_int(byte) & 0x7f)
         byte = buff.read(1)
     return delta
+
+
+class EventType(Enum):
+    Note_Off = 0x8
+    Note_On = 0x9
+    Note_Aftertouch = 0xA
+    Controller = 0xB
+    Program = 0xC
+    Channel_Aftertouch = 0xD
+    Pitch = 0xE
+
+
+class MetaEventType(Enum):
+    Sequence_Num = 0x00
+    Text_Event = 0x01
+    Copyright = 0x02
+    Track_Name = 0x03
+    Instr_Name = 0x04
+    Lyrics = 0x05
+    Marker = 0x06
+    Cue_Point = 0x07
+    Midi_Channel_Prefix = 0x20
+    End_Track = 0x2f
+    Set_Tempo = 0x51
+    SMPTE_Offset = 0x54
+    Time_Sig = 0x58
+    Key_Sig = 0x59
 
 
 class Event(NamedTuple):
@@ -28,77 +56,45 @@ class Event(NamedTuple):
     delta_time: int
 
     def __repr__(self) -> str:
-        status_map = {
-            0x8: 'note off',
-            0x9: 'note on',
-            0xA: 'note aftertouch',
-            0xB: 'controller',
-            0xC: 'program change',
-            0xD: 'channel aftertouch',
-            0xE: 'pitch bend',
-        }
         status = to_int(self.status) >> 4
-        if status == 0xf:
-            return 'META: %s' % str(self.data)
-
-        elif status in status_map:
-            params = []
-            for byte in self.data:
-                params.append(byte)
-            return '%s: %s' % (status_map[status], str(params))
-
-        raise Exception('Error while printing Event:', str(status))
+        params = []
+        for byte in self.data:
+            params.append(byte)
+        return '%s: %s' % (EventType(status), str(params))
 
     @staticmethod
-    def from_bytes(b: BufferedReader, prev_evt: Optional['Event']) -> 'Event':
+    def from_bytes(b: BufferedReader, last_event: Optional['Event']) -> 'Event':
         dtime = read_variable_int(b)
         status = b.read(1)
         if status == b'\xff':
-            _type = b.read(1)
+            msg_type = b.read(1)
             msg_len = to_int(b.read(1))
             data = b.read(msg_len)
-            return MetaEvent(_type, -1, data, 0)
+            # TODO: Find out what channel meta events should be on
+            return MetaEvent(msg_type, -1, data, dtime)
 
-        data = b''
-        if status < b'\x80' and prev_evt:
-            data += status
-            status = prev_evt.status
+        if status < b'\x80' and last_event:
+            return Event(
+                last_event.status,
+                last_event.channel,
+                status + b.read(len(last_event.data) - 1),
+                dtime)
 
         channel = to_int(status) % 16
         value = to_int(status) >> 4
-        if value in [0x8, 0x9, 0xA, 0xB, 0xC, 0xD, 0xE]:
-            if value in [0xC, 0xD]:
-                data += b.read(1 - len(data))
-            else:
-                data += b.read(2 - len(data))
-
-        return Event(status, channel, data, dtime)
+        if value in [0x8, 0x9, 0xA, 0xB, 0xE]:
+            return Event(status, channel, b.read(2), dtime)
+        elif value in [0xC, 0xD]:
+            return Event(status, channel, b.read(1), dtime)
+        else:
+            raise Exception('Unable to read Event!')
 
 
 class MetaEvent(Event):
 
     def __repr__(self) -> str:
-        status_map = {
-            0x00: 'sequence number',
-            0x01: 'text event',
-            0x02: 'copyright notice',
-            0x03: 'track name',
-            0x04: 'instrument name',
-            0x05: 'lyrics',
-            0x06: 'marker',
-            0x07: 'cue point',
-            0x20: 'midi channel prefix',
-            0x2f: 'end of track',
-            0x51: 'set tempo',
-            0x54: 'smpte offset',
-            0x58: 'time signature',
-            0x59: 'key signature',
-        }
         status = to_int(self.status)
-        if status in status_map:
-            return '%s: %s' % (status_map[status], str(self.data))
-
-        raise Exception('Error while printing Event: ' + str(self.status))
+        return '%s: %s' % (MetaEventType(status), str(self.data))
 
 
 class Track(NamedTuple):
@@ -111,8 +107,8 @@ class Track(NamedTuple):
         start_pos = b.tell()
         events: List[Event] = []
         while b.tell() - start_pos < chunk_len:
-            prev_evt = events[-1] if len(events) > 0 else None
-            event = Event.from_bytes(b, prev_evt)
+            last_event = events[-1] if len(events) > 0 else None
+            event = Event.from_bytes(b, last_event)
             events.append(event)
 
         return Track({}, events)
