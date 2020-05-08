@@ -1,5 +1,5 @@
 '''
-a rough MIDI Parser
+a very basic MIDI Parser
 Max Sun 2020
 '''
 from os import listdir
@@ -142,24 +142,32 @@ class Midi(NamedTuple):
     def from_bytes(b: BufferedReader) -> 'Midi':
         header = None
         tracks = []
-        while midi_buffer.peek(4):
-            chunk_type = midi_buffer.read(4)
+        while b.peek(4):
+            chunk_type = b.read(4)
             if chunk_type == b'MThd':
-                header = Header.from_bytes(midi_buffer)
+                header = Header.from_bytes(b)
             elif chunk_type == b'MTrk':
-                track = Track.from_bytes(midi_buffer)
+                track = Track.from_bytes(b)
                 tracks.append(track)
         if header is None:
             raise Exception('Failed to find header!')
         return Midi(header, tracks)
 
+    @staticmethod
+    def from_file(path: str) -> 'Midi':
+        with open(path, 'rb') as f:
+            fio = FileIO(f.fileno())
+            buff = BufferedReader(fio)
+            return Midi.from_bytes(buff)
 
-midi_dir = './midi_files'
-midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
-file_path = midi_files[9]
-with open(file_path, 'rb') as midi_file:
-    fio = FileIO(midi_file.fileno())
-    midi_buffer = BufferedReader(fio)
-    midi = Midi.from_bytes(midi_buffer)
-    print(midi)
+if __name__ == '__main__':
+    midi_dir = './midi_files'
+    midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
+
+    file_path = midi_files[9]
+    with open(file_path, 'rb') as midi_file:
+        fio = FileIO(midi_file.fileno())
+        midi_buffer = BufferedReader(fio)
+        midi = Midi.from_bytes(midi_buffer)
+        print(midi)
