@@ -31,24 +31,8 @@ print(fp)
 m = Midi.from_file(fp)
 
 
-event_times = []
-ticks_per_qbeat = parse_midi.to_int(m.header.division) & 0x7fff
-
-tempo = 120
-for track in m.tracks:
-    t: float = 0.0
-    for evt in track.events:
-        if evt.status == MessageType.Set_Tempo:
-            tempo = parse_midi.to_int(evt.data)  # seconds / qbeat
-
-        secs_per_tick = ticks_per_qbeat / tempo * 4
-        t += evt.dtime * secs_per_tick
-        event_times.append((t, evt))
-
-event_times = sorted(event_times, key=lambda x: x[0])
-
 start_time = time.time()
-for t, evt in event_times:
+for t, evt in m.abs_times():
     dtime = max(t - (time.time() - start_time), 0)
     time.sleep(dtime)
     if evt.status == MessageType.Note_On:

@@ -6,7 +6,7 @@ Max Sun 2020
 '''
 from os import listdir
 from os.path import join
-from typing import Dict, Optional, NamedTuple, List, Union
+from typing import Dict, Optional, NamedTuple, List, Union, Tuple
 from io import BufferedReader, FileIO
 from enum import Enum
 
@@ -117,6 +117,16 @@ class Track(NamedTuple):
 
         return Track({}, events)
 
+    def abs_times(self) -> List[Tuple[int, Event]]:
+        event_times = []
+        t = 0
+        for evt in self.events:
+            t += evt.dtime
+            event_times.append((t, evt))
+
+        return sorted(event_times, key=lambda x: x[0])
+
+
 
 class Header(NamedTuple):
     format: int
@@ -159,6 +169,25 @@ class Midi(NamedTuple):
             buff = BufferedReader(fio)
             return Midi.from_bytes(buff)
 
+    def abs_times(self) -> List[Tuple[float, Event]]:
+        ticks_per_qbeat = to_int(self.header.division) & 0x7fff
+
+        all_events = sum([t.abs_times() for t in self.tracks], [])
+        tempo = 120
+        results: List[Tuple[float, Event]] = []
+        time: float = 0.0
+        for _, evt in sorted(all_events, key=lambda x: x[0]):
+            if evt.status == MessageType.Set_Tempo:
+                tempo = to_int(evt.data)  # seconds / qbeat
+
+            secs_per_tick = ticks_per_qbeat / tempo * 4
+            time += evt.dtime * secs_per_tick
+            results.append((time, evt))
+
+        return results
+
+
+
 
 if __name__ == '__main__':
     midi_dir = './midi_files'
@@ -169,4 +198,4 @@ if __name__ == '__main__':
         fio = FileIO(midi_file.fileno())
         midi_buffer = BufferedReader(fio)
         midi = Midi.from_bytes(midi_buffer)
-        print(midi)
+        print(midi.abs_times())
