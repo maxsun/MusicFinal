@@ -21,7 +21,7 @@ def read_variable_int(buff: BufferedReader) -> int:
     while byte >= b'\x80':
         delta = (delta << 7) | (to_int(byte) & 0x7f)
         byte = buff.read(1)
-    return delta
+    return (delta << 7) | (to_int(byte) & 0x7f)
 
 
 class MessageType(Enum):
@@ -66,13 +66,6 @@ class Event(NamedTuple):
     data: bytes
     dtime: int
 
-    def __repr__(self) -> str:
-        params = []
-        for byte in self.data:
-            params.append(byte)
-        x = self.status.parse_data(self.data)
-        return '%s: %s' % (self.status, x)
-
     @staticmethod
     def from_bytes(b: BufferedReader, dtime: int) -> 'Event':
 
@@ -107,6 +100,7 @@ class Track(NamedTuple):
         chunk_len = to_int(b.read(4))
         start_pos = b.tell()
         events: List[Event] = []
+        # TODO: stop while on 'Track End' Message
         while b.tell() - start_pos < chunk_len:
             last_event = events[-1] if len(events) > 0 else None
 

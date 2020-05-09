@@ -28,7 +28,7 @@ midi_dir = './midi_files'
 midi_paths = [join(midi_dir, x) for x in listdir(midi_dir)]
 # midi_paths[:5]
 
-fp = midi_paths[12]
+fp = midi_paths[1]
 print(fp)
 m = Midi.from_file(fp)
 track1 = m.tracks[1]
