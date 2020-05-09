@@ -11,20 +11,21 @@ import time
 # Also install SoundFonts, I got one from here: https://rkhive.com/piano.html
 
 cwd = Path.cwd()
-fluidsynth.init(str(cwd / "soundfont.SF2"))
+fluidsynth.init(str(cwd / "Velocity Grand Piano.sf2"), 'alsa')
 n = Note("C-5")
 n.channel = 1
 n.velocity = 100
 fluidsynth.play_Note(n)
 
-time.sleep(1)
+# time.sleep(1)
 fluidsynth.play_Note(Note('A-5'))
-
-# fluidsynth.stop_Note(Note("C-5"), 1)
+time.sleep(1)
+fluidsynth.play_Note(Note('C-5'))
+# fluidsynth.stop_Note(Note("C-5"))
 
 
 # e = Bar('E', (6, 8))
 # e.place_notes("A-4", 4)
 # fluidsynth.play_Bar(e, 1, 150)
 
-time.sleep(5)
+time.sleep(2)
