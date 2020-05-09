@@ -186,6 +186,27 @@ class Midi(NamedTuple):
 
         return results
 
+    def note_times(self):
+        note_times = []
+        on_notes = {}
+        for time, evt in self.abs_times():
+            if evt.status == MessageType.Note_On:
+                if evt.data[1] == 0 and evt.data[0] in on_notes:
+                    note_times.append((evt, (on_notes[evt.data[0]], time)))
+                    del on_notes[evt.data[0]]
+                else:
+                    on_notes[evt.data[0]] = time
+            elif evt.status == MessageType.Note_Off:
+                note_times.append((evt, (on_notes[evt.data[0]], time)))
+                del on_notes[evt.data[0]]
+        return note_times
+
+    def get_events_in_timerange(self, start, end) -> 'Midi':
+        results = []
+        for t, evt in self.abs_times():
+            if t >= start and t < end:
+                results.append(evt)
+        return Midi(self.header, [Track({}, results)])
 
 
 
