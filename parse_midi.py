@@ -1,6 +1,8 @@
 '''
 a very basic MIDI Parser
 Max Sun 2020
+# TODO:
+- Stop using NamedTuple
 '''
 from os import listdir
 from os.path import join
@@ -22,7 +24,8 @@ def read_variable_int(buff: BufferedReader) -> int:
     return delta
 
 
-class EventType(Enum):
+class MessageType(Enum):
+    # Channel Events:
     Note_Off = 0x8
     Note_On = 0x9
     Note_Aftertouch = 0xA
@@ -30,7 +33,7 @@ class EventType(Enum):
     Program = 0xC
     Channel_Aftertouch = 0xD
     Pitch = 0xE
-
+    # Meta Events:
     Sequence_Num = 0x00
     Text_Event = 0x01
     Copyright = 0x02
@@ -46,59 +49,19 @@ class EventType(Enum):
     Time_Sig = 0x58
     Key_Sig = 0x59
 
-    def data_len(self) -> int:
-        assert not self.is_meta()
-        if self in [EventType.Program, EventType.Channel_Aftertouch]:
-            return 1
-        return 2
-
     def is_meta(self) -> bool:
         return self not in [
-            EventType.Note_Off,
-            EventType.Note_On,
-            EventType.Note_Aftertouch,
-            EventType.Controller,
-            EventType.Program,
-            EventType.Channel_Aftertouch,
-            EventType.Pitch]
-
-    def parse_data(self, data: bytes):
-        if self.is_meta():
-            if self == EventType.SMPTE_Offset:
-                raise NotImplementedError('SPTME Offset Parsing missing!')
-
-            if self == EventType.Time_Sig:
-                return str(data)
-
-            if self in [
-                EventType.Sequence_Num,
-                EventType.Midi_Channel_Prefix,
-                EventType.Set_Tempo
-            ]:
-                return to_int(data)
-            
-            return str(data)
-
-        p1, p2 = {
-            EventType.Note_Off: ('Note', 'Velocity'),
-            EventType.Note_On: ('Note', 'Velocity'),
-            EventType.Note_Aftertouch: ('Note', 'Amount'),
-            EventType.Controller: ('Controller Num', 'Value'),
-            EventType.Program: ('Program Num', None),
-            EventType.Channel_Aftertouch: ('Amount', None),
-            EventType.Pitch: ('LSB', 'MSB')
-        }[self]
-
-        if p1 and p2:
-            return {p1: data[0], p2: data[1]}
-        elif p1:
-            return {p1: data[0]}
-
-        raise Exception('Error Parsing Data!')
+            MessageType.Note_Off,
+            MessageType.Note_On,
+            MessageType.Note_Aftertouch,
+            MessageType.Controller,
+            MessageType.Program,
+            MessageType.Channel_Aftertouch,
+            MessageType.Pitch]
 
 
 class Event(NamedTuple):
-    status: EventType
+    status: MessageType
     channel: int
     data: bytes
     dtime: int
@@ -119,14 +82,19 @@ class Event(NamedTuple):
             msg_len = to_int(b.read(1))
 
             return Event(
-                EventType(status),
+                MessageType(status),
                 0,
                 b.read(msg_len), dtime)
+
         value = status >> 4
+        msg_len = 1 if MessageType(value) in [
+            MessageType.Program,
+            MessageType.Channel_Aftertouch] else 2
+
         return Event(
-            EventType(value),
+            MessageType(value),
             status % 16,
-            b.read(EventType(value).data_len()), dtime)
+            b.read(msg_len), dtime)
 
 
 class Track(NamedTuple):
@@ -145,7 +113,7 @@ class Track(NamedTuple):
             dtime = read_variable_int(b)
             status_peek = b.peek(1)[:1]
 
-            if status_peek < b'\x80' and last_event and isinstance(last_event, Event):
+            if status_peek < b'\x80' and isinstance(last_event, Event):
                 events.append(Event(
                     last_event.status,
                     last_event.channel,
@@ -185,8 +153,7 @@ class Midi(NamedTuple):
             if chunk_type == b'MThd':
                 header = Header.from_bytes(b)
             elif chunk_type == b'MTrk':
-                track = Track.from_bytes(b)
-                tracks.append(track)
+                tracks.append(Track.from_bytes(b))
         if header is None:
             raise Exception('Failed to find header!')
         return Midi(header, tracks)
