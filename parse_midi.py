@@ -169,20 +169,19 @@ class Midi(NamedTuple):
             buff = BufferedReader(fio)
             return Midi.from_bytes(buff)
 
-    def tempo_at_tick(self, tick: int) -> float:
-        tempo = 120 # 500000 usecs/qnote == 120bpm
-        all_events = sum([t.abs_times() for t in self.tracks], [])
-        for t, evt in sorted(all_events, key=lambda x: x[0])[::-1]:
-            if evt.status == MessageType.Set_Tempo and t <= tick:
-                tempo = to_int(evt.data)
-                break
-        return tempo
-
 
     def abs_times(self) -> List[Tuple[float, Event]]:
         ticks_per_qbeat = to_int(self.header.division) & 0x7fff
 
-        all_events = sum([t.abs_times() for t in self.tracks], [])
+        tempo_events = [(0, 500000)]
+        for track in self.tracks:
+            tick_time = 0
+            for evt in track.events:
+                tick_time += evt.dtime
+                if evt.status == MessageType.Set_Tempo:
+                    tempo_events.append((tick_time, to_int(evt.data)))
+        tempo_events = sorted(tempo_events, key=lambda x: x[0])
+
         tempo = 120
         results: List[Tuple[float, Event]] = []
         for track in self.tracks:
@@ -190,8 +189,7 @@ class Midi(NamedTuple):
             tick_index = 0
             for evt in track.events:
                 tick_index += evt.dtime
-                # tempo = self.tempo_at_tick(tick_index)
-                tempo = 500000
+                tempo = [x for x in tempo_events if x[0] <= tick_index][0][1]
                 secs_per_tick = ticks_per_qbeat / tempo
                 time += evt.dtime * secs_per_tick
                 results.append((time, evt))
@@ -202,23 +200,30 @@ class Midi(NamedTuple):
         note_times = []
         on_notes = {}
         for time, evt in self.abs_times():
-            if evt.status == MessageType.Note_On:
-                if evt.data[1] == 0 and evt.data[0] in on_notes:
-                    note_times.append((evt, (on_notes[evt.data[0]], time)))
-                    del on_notes[evt.data[0]]
+            if evt.status in [MessageType.Note_On, MessageType.Note_Off]:
+                midi_note = evt.data[0]
+                if evt.status == MessageType.Note_Off or evt.data[1] == 0 and midi_note in on_notes:
+                    note_times.append({
+                        'start': on_notes[midi_note][0],
+                        'end': time,
+                        'midi': midi_note,
+                        'vel': on_notes[midi_note][1]
+                    })
+                    del on_notes[midi_note]
                 else:
-                    on_notes[evt.data[0]] = time
-            elif evt.status == MessageType.Note_Off:
-                note_times.append((evt, (on_notes[evt.data[0]], time)))
-                del on_notes[evt.data[0]]
-        return note_times
+                    vel = evt.data[1]
+                    on_notes[midi_note] = (time, vel)
 
-    def get_events_in_timerange(self, start, end) -> 'Midi':
-        results = []
-        for t, evt in self.abs_times():
-            if t >= start and t < end:
-                results.append(evt)
-        return Midi(self.header, [Track({}, results)])
+            # if evt.status == MessageType.Note_On:
+            #     if evt.data[1] == 0 and evt.data[0] in on_notes:
+            #         note_times.append((evt, (on_notes[evt.data[0]], time)))
+            #         del on_notes[evt.data[0]]
+            #     else:
+            #         on_notes[evt.data[0]] = time
+            # elif evt.status == MessageType.Note_Off:
+            #     note_times.append((evt, (on_notes[evt.data[0]], time)))
+            #     del on_notes[evt.data[0]]
+        return note_times
 
 
 
@@ -232,6 +237,6 @@ if __name__ == '__main__':
         midi_buffer = BufferedReader(fio)
         midi = Midi.from_bytes(midi_buffer)
         # print(midi.abs_times())
-        x = midi.abs_times()
+        x = midi.note_times()
         # print(midi.tempo_at_tick(20000))
         print(x)
