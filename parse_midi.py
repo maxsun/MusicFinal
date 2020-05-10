@@ -169,22 +169,34 @@ class Midi(NamedTuple):
             buff = BufferedReader(fio)
             return Midi.from_bytes(buff)
 
+    def tempo_at_tick(self, tick: int) -> float:
+        tempo = 120 # 500000 usecs/qnote == 120bpm
+        all_events = sum([t.abs_times() for t in self.tracks], [])
+        for t, evt in sorted(all_events, key=lambda x: x[0])[::-1]:
+            if evt.status == MessageType.Set_Tempo and t <= tick:
+                tempo = to_int(evt.data)
+                break
+        return tempo
+
+
     def abs_times(self) -> List[Tuple[float, Event]]:
         ticks_per_qbeat = to_int(self.header.division) & 0x7fff
 
         all_events = sum([t.abs_times() for t in self.tracks], [])
         tempo = 120
         results: List[Tuple[float, Event]] = []
-        time: float = 0.0
-        for _, evt in sorted(all_events, key=lambda x: x[0]):
-            if evt.status == MessageType.Set_Tempo:
-                tempo = to_int(evt.data)  # seconds / qbeat
+        for track in self.tracks:
+            time: float = 0.0
+            tick_index = 0
+            for evt in track.events:
+                tick_index += evt.dtime
+                # tempo = self.tempo_at_tick(tick_index)
+                tempo = 500000
+                secs_per_tick = ticks_per_qbeat / tempo
+                time += evt.dtime * secs_per_tick
+                results.append((time, evt))
 
-            secs_per_tick = ticks_per_qbeat / tempo * 4
-            time += evt.dtime * secs_per_tick
-            results.append((time, evt))
-
-        return results
+        return sorted(results, key=lambda x: x[0])
 
     def note_times(self):
         note_times = []
@@ -214,9 +226,12 @@ if __name__ == '__main__':
     midi_dir = './midi_files'
     midi_files = [join(midi_dir, x) for x in listdir(midi_dir)]
 
-    file_path = midi_files[1]
+    file_path = midi_files[9]
     with open(file_path, 'rb') as midi_file:
         fio = FileIO(midi_file.fileno())
         midi_buffer = BufferedReader(fio)
         midi = Midi.from_bytes(midi_buffer)
-        print(midi.abs_times())
+        # print(midi.abs_times())
+        x = midi.abs_times()
+        # print(midi.tempo_at_tick(20000))
+        print(x)
