@@ -66,27 +66,66 @@ def save_sentences(sentences, path='sentences.json'):
     open(path, 'w').write(json.dumps(jsonobj))
 
 
-midi_dir = './midi_files'
-file_paths = [join(midi_dir, x) for x in listdir(midi_dir)]
-print('Reading %s midi files...' % len(file_paths))
+def open_sentences(path='sentences.json'):
+    sents = {}
+    obj = json.loads(open(path, 'r').read())
+    return obj
+
+# midi_dir = './midi_files'
+# file_paths = [join(midi_dir, x) for x in listdir(midi_dir)]
+# print('Reading %s midi files...' % len(file_paths))
 
 
-sentences = {}
-for i, fp in enumerate(file_paths):
+# sentences = {}
+# for i, fp in enumerate(file_paths):
 
     
 
-    mid = Midi.from_file(fp)
-    notes_data = pd.DataFrame(mid.note_times())
-    word_duration = calc_slice_duration(notes_data, 0.05)
-    words = slice_notes(notes_data, word_duration)
-    print(i, fp, len(words))
-    sentences[fp] = words
-    save_sentences(sentences)
-    # break
+#     mid = Midi.from_file(fp)
+#     notes_data = pd.DataFrame(mid.note_times())
+#     word_duration = calc_slice_duration(notes_data, 0.05)
+#     words = slice_notes(notes_data, word_duration)
+#     print(i, fp, len(words))
+#     sentences[fp] = words
+#     save_sentences(sentences)
+#     # break
 
+sentences = open_sentences()
 
+all_words = []
+for _, sent in sentences.items():
+    all_words += sent
 
+immut = []
+for word in all_words:
+    w = []
+    for n in word:
+        w.append(n['midi'])
+    immut.append(frozenset(w))
+ 
+print(len(all_words))
+print(len(set(immut)))
+
+word_to_index = {}
+index_to_word = {}
+
+for i, word in enumerate(immut):
+    word_to_index[word] = i
+    index_to_word[i] = list(immut)
+
+compressed = []
+for word in all_words:
+    w = []
+    for n in word:
+        w.append(n['midi'])
+    compressed.append(word_to_index[frozenset(w)])
+
+print(len(compressed))
+print(compressed[:100])
+
+# open('word_to_index.json', 'w').write(json.dumps(word_to_index))
+# open('index_to_word.json', 'w').write(json.dumps(index_to_word))
+open('words.txt', 'w').write(', '.join([str(x) for x in compressed]))
 
 # compressed = []
 # for word in words:
