@@ -196,6 +196,16 @@ class Midi(NamedTuple):
 
         return sorted(results, key=lambda x: x[0])
 
+    def key_sigs(self):
+        results = []
+        for track in self.tracks:
+            for evt in track.events:
+                if evt.status == MessageType.Key_Sig:
+                    sf = int.from_bytes(bytes(evt.data[0]), byteorder='big', signed=True)
+                    mi = evt.data[1]
+                    results.append((sf, mi))
+        return results
+
     def note_times(self):
         note_times = []
         on_notes = {}
